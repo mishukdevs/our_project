@@ -263,32 +263,34 @@ export class QuestionsStore {
   }
 
   // Vote / Unvote
-  public static toggleVote(questionId: string, studentId: string): { voteCount: number; hasVoted: boolean } {
-    const questions = this.getStoredQuestions();
-    const userVotes = this.getStoredVotes();
-    const studentVotes = userVotes[studentId] || [];
+  public static async toggleVote(questionId: string, studentId: string): Promise<{ voteCount: number; hasVoted: boolean }> {
+    const supabase = createClient();
 
-    const hasVoted = studentVotes.includes(questionId);
-    let newVoteCount = 0;
+    const { data: existingVote } = await supabase
+      .from('votes')
+      .select('question_id')
+      .eq('question_id', questionId)
+      .eq('student_id', studentId)
+      .maybeSingle();
 
-    const updatedQuestions = questions.map((q) => {
-      if (q.id === questionId) {
-        newVoteCount = hasVoted ? Math.max(0, q.voteCount - 1) : q.voteCount + 1;
-        return { ...q, voteCount: newVoteCount };
-      }
-      return q;
-    });
+    const hasVoted = !!existingVote;
 
     if (hasVoted) {
-      userVotes[studentId] = studentVotes.filter((id) => id !== questionId);
+      await supabase.rpc('remove_vote', { p_question_id: questionId });
     } else {
-      userVotes[studentId] = [...studentVotes, questionId];
+      await supabase.rpc('cast_vote', { p_question_id: questionId });
     }
 
-    this.saveQuestions(updatedQuestions);
-    this.saveVotes(userVotes);
+    const { data: updatedQuestion } = await supabase
+      .from('questions')
+      .select('vote_count')
+      .eq('id', questionId)
+      .single();
 
-    return { voteCount: newVoteCount, hasVoted: !hasVoted };
+    return {
+      voteCount: updatedQuestion?.vote_count ?? 0,
+      hasVoted: !hasVoted,
+    };
   }
 
   // Ask new question
@@ -302,14 +304,10 @@ export class QuestionsStore {
   }): Promise<Question> {
     const supabase = createClient();
 
-    // Check authentication session or user
-    const { data: { session } } = await supabase.auth.getSession();
+    // Check authentication
     const { data: { user } } = await supabase.auth.getUser();
-
-    if (!session) {
-      if (!user) {
-        throw new Error('Not authenticated. Please sign in.');
-      }
+    if (!user) {
+      throw new Error('Not authenticated. Please sign in.');
     }
 
     // 1. Resolve course id
@@ -364,75 +362,85 @@ export class QuestionsStore {
   }
 
   // Get full thread messages
-  public static getThread(questionId: string): Message[] {
-    const messages = this.getStoredMessages();
-    return messages
-      .filter((m) => m.questionId === questionId)
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  public static async getThread(questionId: string): Promise<Message[]> {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc('get_question_thread', {
+      p_question_id: questionId,
+    });
+
+    if (error || !data) {
+      console.error('Failed to fetch thread', error?.message);
+      return [];
+    }
+
+    return data.map((m: any) => ({
+      id: m.message_id,
+      questionId: questionId,
+      senderType: m.sender_type as 'student' | 'teacher',
+      senderId: m.sender_id,
+      senderName: m.sender_name,
+      body: m.body,
+      attachmentUrl: m.attachment_url,
+      attachmentType: m.attachment_type as 'image' | 'audio' | 'pdf' | null,
+      createdAt: m.created_at,
+    }));
   }
 
   // Post follow-up or reply
-  public static postMessage(data: {
+  public static async postMessage(data: {
     questionId: string;
     senderType: 'student' | 'teacher';
     senderId: string;
     body?: string | null;
     attachmentUrl?: string | null;
     attachmentType?: 'image' | 'audio' | 'pdf' | null;
-  }): Message {
-    const messages = this.getStoredMessages();
-    const questions = this.getStoredQuestions();
+  }): Promise<Message> {
+    const supabase = createClient();
 
-    const newMsg: Message = {
-      id: 'm-' + Date.now(),
-      questionId: data.questionId,
-      senderType: data.senderType,
-      senderId: data.senderId,
-      body: data.body,
-      attachmentUrl: data.attachmentUrl || null,
-      attachmentType: data.attachmentType || null,
-      createdAt: new Date().toISOString(),
-    };
+    const rpcName = data.senderType === 'teacher' ? 'post_teacher_reply' : 'post_student_followup';
 
-    // If teacher replies, flip status to answered and create notification
-    if (data.senderType === 'teacher') {
-      const qIndex = questions.findIndex((q) => q.id === data.questionId);
-      if (qIndex !== -1) {
-        questions[qIndex].status = 'answered';
-        questions[qIndex].updatedAt = new Date().toISOString();
-        this.saveQuestions(questions);
+    const { error } = await supabase.rpc(rpcName, {
+      p_question_id: data.questionId,
+      p_body: data.body || '',
+      p_attachment_url: data.attachmentUrl || null,
+      p_attachment_type: data.attachmentType || null,
+    });
 
-        // Notify student
-        const notifs = this.getStoredNotifications();
-        const newNotif: NotificationItem = {
-          id: 'notif-' + Date.now(),
-          recipientType: 'student',
-          recipientId: questions[qIndex].studentId,
-          questionId: data.questionId,
-          message: `Your instructor replied to question: "${questions[qIndex].body.slice(0, 30)}..."`,
-          isRead: false,
-          createdAt: new Date().toISOString(),
-        };
-        this.saveNotifications([newNotif, ...notifs]);
-      }
+    if (error) {
+      throw new Error('Failed to send message: ' + error.message);
     }
 
-    this.saveMessages([...messages, newMsg]);
-    return newMsg;
+    const { data: latestMsg, error: fetchError } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('question_id', data.questionId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (fetchError || !latestMsg) {
+      throw new Error('Message sent but failed to fetch it back');
+    }
+
+    return {
+      id: latestMsg.id,
+      questionId: latestMsg.question_id,
+      senderType: latestMsg.sender_type,
+      senderId: latestMsg.sender_id,
+      body: latestMsg.body,
+      attachmentUrl: latestMsg.attachment_url,
+      attachmentType: latestMsg.attachment_type,
+      createdAt: latestMsg.created_at,
+    };
   }
 
   // Mark solved by student
-  public static markSolved(questionId: string, studentId: string): boolean {
-    const questions = this.getStoredQuestions();
-    const qIndex = questions.findIndex((q) => q.id === questionId && q.studentId === studentId);
-
-    if (qIndex !== -1) {
-      questions[qIndex].status = 'solved';
-      questions[qIndex].updatedAt = new Date().toISOString();
-      this.saveQuestions(questions);
-      return true;
-    }
-    return false;
+  public static async markSolved(questionId: string, studentId: string): Promise<boolean> {
+    const supabase = createClient();
+    const { error } = await supabase.rpc('mark_question_solved', {
+      p_question_id: questionId,
+    });
+    return !error;
   }
 
   // Get student's own history
