@@ -45,8 +45,7 @@ export function TeacherThreadModal({
   useEffect(() => {
     if (question) {
       setCurrentQuestion(question);
-      const msgs = QuestionsStore.getThread(question.id);
-      setThreadMessages(msgs);
+      QuestionsStore.getThread(question.id).then(setThreadMessages);
     }
   }, [question]);
 
@@ -102,11 +101,11 @@ export function TeacherThreadModal({
   };
 
   // Submit Reply Message
-  const handleSendReply = (e: React.FormEvent) => {
+  const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim() && !attachment) return;
 
-    const newMsg = QuestionsStore.postMessage({
+    const newMsg = await QuestionsStore.postMessage({
       questionId: currentQuestion.id,
       senderType: 'teacher',
       senderId: teacherId,
