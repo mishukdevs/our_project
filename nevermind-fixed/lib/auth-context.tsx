@@ -195,10 +195,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .single();
 
-      if (!data.isSignUp && !studentData) {
-        return { error: 'No student account found for this email. Please sign up first.' };
-      }
-
       const profile: StudentProfile = studentData
         ? {
             id: studentData.id,
@@ -324,10 +320,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .select('*, courses(*)')
         .eq('id', userId)
         .single();
-
-      if (!data.isSignUp && !teacherData) {
-        return { error: 'No teacher account found for this email. Please sign up first.' };
-      }
 
       let profile: TeacherProfile;
       if (teacherData) {
