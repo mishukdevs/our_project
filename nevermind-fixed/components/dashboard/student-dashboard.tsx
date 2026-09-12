@@ -61,9 +61,9 @@ export function StudentDashboard() {
 
   if (!student) return null;
 
-  const handleVote = (e: React.MouseEvent, questionId: string) => {
+  const handleVote = async (e: React.MouseEvent, questionId: string) => {
     e.stopPropagation();
-    QuestionsStore.toggleVote(questionId, student.id);
+    await QuestionsStore.toggleVote(questionId, student.id);
     loadQuestions();
   };
 
