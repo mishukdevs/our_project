@@ -49,8 +49,7 @@ export function QuestionThreadModal({
   useEffect(() => {
     if (question) {
       setCurrentQuestion(question);
-      const msgs = QuestionsStore.getThread(question.id);
-      setThreadMessages(msgs);
+      QuestionsStore.getThread(question.id).then(setThreadMessages);
     }
   }, [question]);
 
@@ -59,9 +58,9 @@ export function QuestionThreadModal({
   const isOwner = currentQuestion.studentId === studentId;
 
   // Mark Solved (Green ✓ Tapped)
-  const handleMarkSolved = () => {
+  const handleMarkSolved = async () => {
     if (!isOwner) return;
-    QuestionsStore.markSolved(currentQuestion.id, studentId);
+    await QuestionsStore.markSolved(currentQuestion.id, studentId);
     setCurrentQuestion((prev) => (prev ? { ...prev, status: 'solved' } : null));
     onStatusUpdated();
   };
@@ -116,11 +115,11 @@ export function QuestionThreadModal({
   };
 
   // Submit Follow-up Message
-  const handleSendFollowup = (e: React.FormEvent) => {
+  const handleSendFollowup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!followupText.trim() && !attachment) return;
 
-    const newMsg = QuestionsStore.postMessage({
+    const newMsg = await QuestionsStore.postMessage({
       questionId: currentQuestion.id,
       senderType: 'student',
       senderId: studentId,
