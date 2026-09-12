@@ -132,9 +132,9 @@ export function AskDoubtSection({
     }
   };
 
-  const handleVoteMatch = (e: React.MouseEvent, qId: string) => {
+  const handleVoteMatch = async (e: React.MouseEvent, qId: string) => {
     e.stopPropagation();
-    QuestionsStore.toggleVote(qId, studentId);
+    await QuestionsStore.toggleVote(qId, studentId);
     setMatches((prev) =>
       prev.map((m) =>
         m.id === qId ? { ...m, voteCount: m.voteCount + 1, hasVoted: true } : m
